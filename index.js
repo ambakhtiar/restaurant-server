@@ -2,13 +2,15 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 const jwt = require('jsonwebtoken');
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
 
 // middlware 
 app.use(cors());
 app.use(express.json());
+app.use(express.static("public"));
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.zflfj9t.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -31,6 +33,7 @@ async function run() {
         const menuCollection = client.db("bistroDb").collection("menu");
         const reviewCollection = client.db("bistroDb").collection("reviews");
         const cartCollection = client.db("bistroDb").collection("carts");
+        const paymentCollection = client.db("bistroDb").collection("payments");
 
         // jwt related api 
         app.post('/jwt', async (req, res) => {
@@ -215,6 +218,45 @@ async function run() {
             const query = { _id: new ObjectId(id) };
             const result = await cartCollection.deleteOne(query);
             res.send(result);
+        })
+
+        // Payment Intent
+        app.post('/create-payment-intent', async (req, res) => {
+            const { price } = req.body;
+            const amount = parseInt(price * 100);
+
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: "usd",
+                payment_method_types: ["card"]
+            })
+
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            })
+        })
+
+        app.get('/payments/:email', verifyToken, async (req, res) => {
+            const query = { email: req.params.email };
+            if (req.decoded.email !== req.params.email) {
+                return res.status(403).send({ message: "forbidden access" });
+            }
+            const result = await paymentCollection.find(query).toArray();
+            res.send(result);
+        })
+
+        app.post('/payments', async (req, res) => {
+            const payment = req.body;
+            const paymentResult = await paymentCollection.insertOne(payment);
+            // console.log("payment info", payment, paymentResult);
+            const query = {
+                _id: {
+                    $in: payment.cartIds.map(id => new ObjectId(id))
+                }
+            }
+            const deleteResult = await cartCollection.deleteMany(query);
+
+            res.send({ paymentResult, deleteResult });
         })
 
 
