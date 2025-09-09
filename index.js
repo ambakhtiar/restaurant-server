@@ -1,8 +1,8 @@
+require('dotenv').config();
 const express = require("express");
 const app = express();
 const cors = require("cors");
 const jwt = require('jsonwebtoken');
-require('dotenv').config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
@@ -27,7 +27,7 @@ const client = new MongoClient(uri, {
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
-        await client.connect();
+        // await client.connect();
 
         const userCollection = client.db("bistroDb").collection("users");
         const menuCollection = client.db("bistroDb").collection("menu");
@@ -44,7 +44,12 @@ async function run() {
 
         // Verify token 
         const verifyToken = (req, res, next) => {
-            const token = req.headers.authorization.split("Bearer ")[1];
+            const authHeader = req.headers.authorization;
+            if (!authHeader) {
+                return res.status(401).send({ message: "Unauthorized access - No token provided" });
+            }
+
+            const token = req.headers.authorization.split(" ")[1];
             // console.log("token", token);
             if (!token) {
                 return res.status(401).send({ message: "Forbidden access" });
@@ -137,17 +142,14 @@ async function run() {
         app.get('/menu/:id', async (req, res) => {
             const id = req.params.id;
 
-            // const query = { _id: new ObjectId(id) };
+            // let query = { _id: new ObjectId(id) };
             let query = { _id: id }; // match string ids
-
-            if (/^[0-9a-fA-F]{24}$/.test(id)) {
-                query = {
-                    $or: [
-                        { _id: id },               // string id
-                        { _id: new ObjectId(id) }  // ObjectId
-                    ]
-                };
-            }
+            query = {
+                $or: [
+                    { _id: id },
+                    { _id: new ObjectId(id) }
+                ]
+            };
 
             const result = await menuCollection.findOne(query);
             res.send(result);
@@ -162,16 +164,11 @@ async function run() {
         app.patch('/menu/:id', verifyToken, verifyAdmin, async (req, res) => {
             const id = req.params.id;
             const item = req.body;
-            let filter = { _id: id }; // match string ids
 
-            if (/^[0-9a-fA-F]{24}$/.test(id)) {
-                filter = {
-                    $or: [
-                        { _id: id },               // string id
-                        { _id: new ObjectId(id) }  // ObjectId
-                    ]
-                };
-            }
+            // id have string and object id formate, so make string into object id
+            let filter = { _id: id }; // match string ids
+            filter = { $or: [{ _id: id }, { _id: new ObjectId(id) }] };
+
             const upsertedId = true;
             const updatedDoc = {
                 $set: {
@@ -259,10 +256,75 @@ async function run() {
             res.send({ paymentResult, deleteResult });
         })
 
+        // States
+        app.get('/admin-states', verifyToken, verifyAdmin, async (req, res) => {
+            const userCount = await userCollection.estimatedDocumentCount();
+            const menuItemCount = await menuCollection.estimatedDocumentCount();
+            const orderCount = await paymentCollection.estimatedDocumentCount();
+            // this is not the best way
+            // const payments = await paymentCollection.find().toArray();
+            // const revenue = payments.reduce((total, payment) => total + payment.price, 0);
+
+            const result = await paymentCollection.aggregate([
+                {
+                    $group: {
+                        _id: null,
+                        totalRevenue: {
+                            $sum: "$price"
+                        }
+                    }
+                }
+            ]).toArray();
+            const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+            res.send({
+                userCount,
+                menuItemCount,
+                orderCount,
+                revenue
+            })
+        })
+
+        app.get('/order-stats', verifyToken, verifyAdmin, async (req, res) => {
+            const result = await paymentCollection.aggregate([
+                {
+                    $unwind: "$menuItemIds"
+                },
+                {
+                    $lookup: {
+                        from: 'menu',
+                        localField: 'menuItemIds',
+                        foreignField: '_id',
+                        as: 'menuItems'
+                    }
+                },
+                {
+                    $unwind: "$menuItems"
+                },
+                {
+                    $group: {
+                        _id: "$menuItems.category",
+                        quantity: { $sum: 1 },
+                        revenue: { $sum: "$menuItems.price" }
+                    }
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        category: "$_id",
+                        quantity: "$quantity",
+                        revenue: "$revenue"
+                    }
+                }
+            ]).toArray();
+
+            res.send(result);
+        })
+
 
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();
@@ -273,9 +335,11 @@ run().catch(console.dir);
 
 
 app.get('/', (req, res) => {
-    res.send("Bistro Boss Restaurant Server is Running");
+    res.send("Bistro Boss Restaurant Server is Running....");
 })
 
 app.listen(port, () => {
     console.log(`Server running on ${port}`);
 })
+
+module.exports = app;
