@@ -6,6 +6,17 @@ const jwt = require('jsonwebtoken');
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
+const formData = require("form-data");
+const Mailgun = require('mailgun.js');
+const mailgun = new Mailgun(formData);
+
+// Mailogun email
+const mg = mailgun.client({
+    username: "api",
+    key: process.env.MAIL_GUN_API_KEY || "API_KEY",
+});
+
+
 
 // middlware 
 app.use(cors());
@@ -252,6 +263,14 @@ async function run() {
                 }
             }
             const deleteResult = await cartCollection.deleteMany(query);
+
+            // Mailgun email 
+            mg.messages.create(process.env.MAIL_SENDING_DOMAIN, {
+                from: `Mailgun Sandbox <postmaster@${process.env.MAIL_SENDING_DOMAIN}>`,
+                to: ["Magee Haney123 <xaha@mailinator.com>"],
+                subject: "Hello Magee Haney123",
+                text: "Congratulations Magee Haney123, you just sent an email with Mailgun! You are truly awesome!",
+            });
 
             res.send({ paymentResult, deleteResult });
         })
